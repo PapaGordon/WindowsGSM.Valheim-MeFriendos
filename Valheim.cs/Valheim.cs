@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using WindowsGSM.Functions;
@@ -52,12 +51,7 @@ namespace WindowsGSM.Plugins
         public string Additional = "-password \"CHANGE_ME\" -savedir \".\\save-data\" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200";
 
         private const uint CTRL_C_EVENT = 0;
-        private const int SW_HIDE = 0;
-        private const int SW_SHOWNORMAL = 1;
-        private static readonly object ConsoleAttachLock = new object();
-
         private delegate bool ConsoleCtrlDelegate(uint ctrlType);
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool AttachConsole(uint processId);
@@ -65,35 +59,11 @@ namespace WindowsGSM.Plugins
         [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
         private static extern bool FreeConsole();
 
-        [DllImport("kernel32.dll")]
-        private static extern IntPtr GetConsoleWindow();
-
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GenerateConsoleCtrlEvent(uint ctrlEvent, uint processGroupId);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool SetConsoleCtrlHandler(ConsoleCtrlDelegate handler, bool add);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsWindowVisible(IntPtr hWnd);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
         public Task<Process> Start()
         {
@@ -137,8 +107,9 @@ namespace WindowsGSM.Plugins
                 EnableRaisingEvents = true
             };
 
-            // Embedded Console remains output-only. stdin stays on the native console so
-            // Valheim can still receive a clean CTRL+C shutdown request.
+            // Embedded Console is output-only. stdout/stderr are forwarded into WindowsGSM,
+            // while stdin stays attached to the native console for clean CTRL+C shutdown.
+            // Raziel WindowsGSM intentionally disables Toggle Console while stdout is redirected.
             if (embedConsole)
             {
                 process.StartInfo.RedirectStandardOutput = true;
@@ -157,17 +128,7 @@ namespace WindowsGSM.Plugins
                 {
                     process.BeginOutputReadLine();
                     process.BeginErrorReadLine();
-
-                    // Raziel v1.25.1.22 disables the Toggle Console button while this
-                    // StartInfo flag remains true. The redirected stdout pipe was already
-                    // created by Process.Start(), so changing StartInfo afterwards does not
-                    // alter the running process or stop the asynchronous Embedded Console.
-                    process.StartInfo.RedirectStandardOutput = false;
                 }
-
-#pragma warning disable 4014
-                Task.Run(() => MonitorNativeConsoleHandle(process));
-#pragma warning restore 4014
 
                 return Task.FromResult(process);
             }
@@ -209,24 +170,17 @@ namespace WindowsGSM.Plugins
                 if (TrySendCtrlC(process, 20000))
                     return;
 
-                // Fallback to the original console-keystroke approach. Prefer the HWND
-                // already repaired by the Toggle Console monitor when it is available.
+                // Fallback to the same console keystroke approach used by the original
+                // WindowsGSM.Valheim plugin when a normal console window is available.
                 try
                 {
                     process.Refresh();
-                    if (!process.HasExited)
+                    if (!process.HasExited && process.MainWindowHandle != IntPtr.Zero)
                     {
-                        IntPtr consoleWindow = GetRegisteredConsoleWindow(process);
-                        if (consoleWindow == IntPtr.Zero)
-                            consoleWindow = process.MainWindowHandle;
-
-                        if (consoleWindow != IntPtr.Zero && IsWindow(consoleWindow))
-                        {
-                            ServerConsole.SetMainWindow(consoleWindow);
-                            ServerConsole.SendWaitToMainWindow("^c");
-                            if (process.WaitForExit(10000))
-                                return;
-                        }
+                        ServerConsole.SetMainWindow(process.MainWindowHandle);
+                        ServerConsole.SendWaitToMainWindow("^c");
+                        if (process.WaitForExit(10000))
+                            return;
                     }
                 }
                 catch
@@ -291,7 +245,8 @@ namespace WindowsGSM.Plugins
             string serverParameters = _serverData.ServerParam ?? string.Empty;
 
             // Valheim redirects its live server output away from the process streams when
-            // -logFile is used. Suppress it only while WindowsGSM Embed Console is enabled.
+            // -logFile is used. WindowsGSM's embedded console reads those process streams,
+            // so suppress -logFile only while Embed Console is enabled.
             if (embedConsole)
                 serverParameters = RemoveArgumentWithValue(serverParameters, "-logFile");
 
@@ -392,502 +347,42 @@ namespace WindowsGSM.Plugins
             }
         }
 
-        private static string GetWindowClassName(IntPtr hWnd)
+        private static bool TrySendCtrlC(Process process, int timeoutMilliseconds)
         {
-            if (hWnd == IntPtr.Zero || !IsWindow(hWnd))
-                return string.Empty;
+            bool attached = false;
 
             try
             {
-                var className = new StringBuilder(256);
-                int length = GetClassName(hWnd, className, className.Capacity);
-                return length > 0 ? className.ToString() : string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        private static IntPtr FindTopLevelWindowForProcess(Process process)
-        {
-            if (process == null)
-                return IntPtr.Zero;
-
-            int processId;
-            try
-            {
-                processId = process.Id;
-            }
-            catch
-            {
-                return IntPtr.Zero;
-            }
-
-            IntPtr visibleWindow = IntPtr.Zero;
-            IntPtr preferredConsoleWindow = IntPtr.Zero;
-
-            try
-            {
-                EnumWindows(delegate (IntPtr hWnd, IntPtr lParam)
-                {
-                    uint windowProcessId;
-                    GetWindowThreadProcessId(hWnd, out windowProcessId);
-
-                    if (windowProcessId != (uint)processId || !IsWindow(hWnd))
-                        return true;
-
-                    string className = GetWindowClassName(hWnd);
-                    if (string.Equals(className, "ConsoleWindowClass", StringComparison.OrdinalIgnoreCase))
-                    {
-                        preferredConsoleWindow = hWnd;
-                        return false;
-                    }
-
-                    if (visibleWindow == IntPtr.Zero && IsWindowVisible(hWnd))
-                        visibleWindow = hWnd;
-
+                if (process == null || process.HasExited)
                     return true;
-                }, IntPtr.Zero);
+
+                attached = AttachConsole((uint)process.Id);
+                if (!attached)
+                    return false;
+
+                // Ignore CTRL+C in WindowsGSM itself while forwarding it to the server console.
+                SetConsoleCtrlHandler(null, true);
+
+                if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0))
+                    return false;
+
+                return process.WaitForExit(timeoutMilliseconds);
             }
             catch
             {
-                return IntPtr.Zero;
+                return false;
             }
-
-            return preferredConsoleWindow != IntPtr.Zero ? preferredConsoleWindow : visibleWindow;
-        }
-
-        private static IntPtr GetAttachedConsoleWindow(Process process, out string windowClass, out int attachError)
-        {
-            windowClass = string.Empty;
-            attachError = 0;
-
-            if (process == null)
-                return IntPtr.Zero;
-
-            lock (ConsoleAttachLock)
+            finally
             {
-                try
+                if (attached)
                 {
-                    if (process.HasExited)
-                        return IntPtr.Zero;
-
-                    // AttachConsole is process-wide. Do not disturb a console WindowsGSM
-                    // was already attached to before this short discovery probe.
-                    if (GetConsoleWindow() != IntPtr.Zero)
-                        return IntPtr.Zero;
-
-                    if (!AttachConsole((uint)process.Id))
-                    {
-                        attachError = Marshal.GetLastWin32Error();
-                        return IntPtr.Zero;
-                    }
-
                     try
                     {
-                        IntPtr consoleWindow = GetConsoleWindow();
-                        if (consoleWindow == IntPtr.Zero || !IsWindow(consoleWindow))
-                            return IntPtr.Zero;
-
-                        windowClass = GetWindowClassName(consoleWindow);
-                        return consoleWindow;
-                    }
-                    finally
-                    {
+                        SetConsoleCtrlHandler(null, false);
                         FreeConsole();
-                    }
-                }
-                catch
-                {
-                    attachError = Marshal.GetLastWin32Error();
-                    return IntPtr.Zero;
-                }
-            }
-        }
-
-        private static IntPtr ResolveToggleWindow(
-            Process process,
-            out string source,
-            out string windowClass,
-            out int attachError)
-        {
-            source = string.Empty;
-            windowClass = string.Empty;
-            attachError = 0;
-
-            if (process == null)
-                return IntPtr.Zero;
-
-            try
-            {
-                process.Refresh();
-                IntPtr mainWindow = process.MainWindowHandle;
-                if (mainWindow != IntPtr.Zero && IsWindow(mainWindow))
-                {
-                    string mainWindowClass = GetWindowClassName(mainWindow);
-                    if (IsWindowVisible(mainWindow) ||
-                        string.Equals(mainWindowClass, "ConsoleWindowClass", StringComparison.OrdinalIgnoreCase))
-                    {
-                        source = "Process.MainWindowHandle after Refresh";
-                        windowClass = mainWindowClass;
-                        return mainWindow;
-                    }
-                }
-            }
-            catch
-            {
-                // Continue with explicit window discovery.
-            }
-
-            IntPtr processWindow = FindTopLevelWindowForProcess(process);
-            if (processWindow != IntPtr.Zero && IsWindow(processWindow))
-            {
-                source = "EnumWindows by Valheim PID";
-                windowClass = GetWindowClassName(processWindow);
-                return processWindow;
-            }
-
-            string consoleClass;
-            IntPtr consoleWindow = GetAttachedConsoleWindow(process, out consoleClass, out attachError);
-            if (consoleWindow == IntPtr.Zero)
-                return IntPtr.Zero;
-
-            source = "AttachConsole/GetConsoleWindow";
-            windowClass = consoleClass;
-            return consoleWindow;
-        }
-
-        private static bool IsSafeToggleTarget(IntPtr hWnd, string windowClass)
-        {
-            if (hWnd == IntPtr.Zero || !IsWindow(hWnd))
-                return false;
-
-            return !string.Equals(windowClass, "PseudoConsoleWindow", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool TryGetShowConsoleState(object metadata, out bool showConsole)
-        {
-            showConsole = false;
-            if (metadata == null)
-                return false;
-
-            try
-            {
-                Type metadataType = metadata.GetType();
-                FieldInfo field = metadataType.GetField(
-                    "ShowConsole",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-                if (field != null && field.FieldType == typeof(bool))
-                {
-                    showConsole = (bool)field.GetValue(metadata);
-                    return true;
-                }
-
-                PropertyInfo property = metadataType.GetProperty(
-                    "ShowConsole",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-                if (property != null && property.PropertyType == typeof(bool) && property.CanRead)
-                {
-                    showConsole = (bool)property.GetValue(metadata, null);
-                    return true;
-                }
-            }
-            catch
-            {
-                // Other WindowsGSM builds can still use normal HWND synchronization.
-            }
-
-            return false;
-        }
-
-        private string GetToggleConsoleDiagnosticPath()
-        {
-            return Path.Combine(
-                ServerPath.GetServersCache(_serverData.ServerID),
-                "valheim-toggle-console.log");
-        }
-
-        private void ResetToggleConsoleDiagnostic(Process process)
-        {
-            try
-            {
-                string path = GetToggleConsoleDiagnosticPath();
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(
-                    path,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") +
-                    " [0.1.2] Toggle Console monitor started for PID " + process.Id +
-                    "; WindowsGSM " + WindowsGSM.MainWindow.WGSM_VERSION + Environment.NewLine);
-            }
-            catch
-            {
-                // Diagnostics must never interfere with server startup.
-            }
-        }
-
-        private void WriteToggleConsoleDiagnostic(string message)
-        {
-            try
-            {
-                string path = GetToggleConsoleDiagnosticPath();
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.AppendAllText(
-                    path,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message + Environment.NewLine);
-            }
-            catch
-            {
-                // Diagnostics must never interfere with server operation.
-            }
-        }
-
-        private void SaveWindowsGsmConsoleHandle(IntPtr consoleWindow)
-        {
-            try
-            {
-                string cachePath = ServerPath.GetServersCache(_serverData.ServerID);
-                Directory.CreateDirectory(cachePath);
-                File.WriteAllText(Path.Combine(cachePath, "windowsIntPtr"), consoleWindow.ToString());
-            }
-            catch
-            {
-                // The in-memory handle is sufficient for the current WindowsGSM session.
-            }
-        }
-
-        private IntPtr GetRegisteredConsoleWindow(Process process)
-        {
-            int serverId;
-            if (process == null || !int.TryParse(Convert.ToString(_serverData.ServerID), out serverId))
-                return IntPtr.Zero;
-
-            try
-            {
-                if (!WindowsGSM.MainWindow._serverMetadata.ContainsKey(serverId))
-                    return IntPtr.Zero;
-
-                var metadata = WindowsGSM.MainWindow._serverMetadata[serverId];
-                Process trackedProcess = metadata.Process;
-                if (trackedProcess == null || trackedProcess.Id != process.Id)
-                    return IntPtr.Zero;
-
-                return metadata.MainWindow != IntPtr.Zero && IsWindow(metadata.MainWindow)
-                    ? metadata.MainWindow
-                    : IntPtr.Zero;
-            }
-            catch
-            {
-                return IntPtr.Zero;
-            }
-        }
-
-        private async Task MonitorNativeConsoleHandle(Process process)
-        {
-            int serverId;
-            if (!int.TryParse(Convert.ToString(_serverData.ServerID), out serverId))
-                return;
-
-            ResetToggleConsoleDiagnostic(process);
-
-            IntPtr resolvedWindow = IntPtr.Zero;
-            string resolvedSource = string.Empty;
-            string resolvedClass = string.Empty;
-            int lastAttachError = 0;
-            DateTime nextResolveAt = DateTime.MinValue;
-            DateTime unresolvedNoticeAt = DateTime.UtcNow.AddSeconds(15);
-            bool unresolvedNoticeShown = false;
-            bool showConsoleCapabilityLogged = false;
-            bool showConsoleUnavailableLogged = false;
-            bool? lastAppliedShowConsole = null;
-
-            while (true)
-            {
-                try
-                {
-                    if (process.HasExited)
-                    {
-                        WriteToggleConsoleDiagnostic("Valheim process exited; Toggle Console monitor stopped.");
-                        return;
-                    }
-                }
-                catch
-                {
-                    WriteToggleConsoleDiagnostic("Valheim process state became unavailable; Toggle Console monitor stopped.");
-                    return;
-                }
-
-                if (resolvedWindow == IntPtr.Zero ||
-                    !IsWindow(resolvedWindow) ||
-                    DateTime.UtcNow >= nextResolveAt)
-                {
-                    string source;
-                    string windowClass;
-                    int attachError;
-                    IntPtr candidate = ResolveToggleWindow(process, out source, out windowClass, out attachError);
-                    lastAttachError = attachError;
-                    nextResolveAt = DateTime.UtcNow.AddSeconds(5);
-
-                    if (candidate != IntPtr.Zero && !IsSafeToggleTarget(candidate, windowClass))
-                    {
-                        WriteToggleConsoleDiagnostic(
-                            "Rejected HWND 0x" + candidate.ToInt64().ToString("X") +
-                            " via " + source + " [" + windowClass + "] because it is not a safe native toggle target.");
-                        candidate = IntPtr.Zero;
-                    }
-
-                    if (candidate != IntPtr.Zero)
-                    {
-                        if (resolvedWindow != candidate)
-                        {
-                            WriteToggleConsoleDiagnostic(
-                                "Resolved HWND 0x" + candidate.ToInt64().ToString("X") +
-                                " via " + source +
-                                (string.IsNullOrWhiteSpace(windowClass) ? string.Empty : " [" + windowClass + "]") + ".");
-                            lastAppliedShowConsole = null;
-                        }
-
-                        resolvedWindow = candidate;
-                        resolvedSource = source;
-                        resolvedClass = windowClass;
-                        unresolvedNoticeShown = false;
-                        unresolvedNoticeAt = DateTime.UtcNow.AddSeconds(15);
-                    }
-                    else if (resolvedWindow != IntPtr.Zero && !IsWindow(resolvedWindow))
-                    {
-                        WriteToggleConsoleDiagnostic("Previously resolved Toggle Console HWND became invalid.");
-                        resolvedWindow = IntPtr.Zero;
-                        resolvedSource = string.Empty;
-                        resolvedClass = string.Empty;
-                        lastAppliedShowConsole = null;
-                    }
-                }
-
-                bool matchingProcessRegistered = false;
-                if (WindowsGSM.MainWindow._serverMetadata.ContainsKey(serverId))
-                {
-                    try
-                    {
-                        var metadata = WindowsGSM.MainWindow._serverMetadata[serverId];
-                        Process trackedProcess = metadata.Process;
-                        matchingProcessRegistered = trackedProcess != null && trackedProcess.Id == process.Id;
-
-                        if (matchingProcessRegistered && resolvedWindow != IntPtr.Zero && IsWindow(resolvedWindow))
-                        {
-                            if (metadata.MainWindow != resolvedWindow)
-                            {
-                                IntPtr previousWindow = metadata.MainWindow;
-                                metadata.MainWindow = resolvedWindow;
-                                SaveWindowsGsmConsoleHandle(resolvedWindow);
-
-                                WriteToggleConsoleDiagnostic(
-                                    "WindowsGSM MainWindow updated from 0x" +
-                                    previousWindow.ToInt64().ToString("X") + " to 0x" +
-                                    resolvedWindow.ToInt64().ToString("X") +
-                                    " via " + resolvedSource +
-                                    (string.IsNullOrWhiteSpace(resolvedClass) ? string.Empty : " [" + resolvedClass + "]") + ".");
-                            }
-
-                            bool desiredShowConsole;
-                            if (TryGetShowConsoleState(metadata, out desiredShowConsole))
-                            {
-                                if (!showConsoleCapabilityLogged)
-                                {
-                                    WriteToggleConsoleDiagnostic(
-                                        "Detected WindowsGSM ShowConsole state support; direct visibility synchronization enabled.");
-                                    showConsoleCapabilityLogged = true;
-                                }
-
-                                bool currentlyVisible = IsWindowVisible(resolvedWindow);
-                                if (currentlyVisible != desiredShowConsole ||
-                                    !lastAppliedShowConsole.HasValue ||
-                                    lastAppliedShowConsole.Value != desiredShowConsole)
-                                {
-                                    ShowWindow(resolvedWindow, desiredShowConsole ? SW_SHOWNORMAL : SW_HIDE);
-                                    lastAppliedShowConsole = desiredShowConsole;
-
-                                    WriteToggleConsoleDiagnostic(
-                                        "Applied ShowConsole=" + desiredShowConsole +
-                                        " directly to HWND 0x" + resolvedWindow.ToInt64().ToString("X") + ".");
-                                }
-                            }
-                            else if (!showConsoleUnavailableLogged)
-                            {
-                                WriteToggleConsoleDiagnostic(
-                                    "WindowsGSM does not expose ShowConsole; using handle synchronization only.");
-                                showConsoleUnavailableLogged = true;
-                            }
-                        }
                     }
                     catch
                     {
-                        // WindowsGSM may update metadata concurrently. Retry on the next pass.
-                    }
-                }
-
-                if (resolvedWindow == IntPtr.Zero &&
-                    DateTime.UtcNow >= unresolvedNoticeAt &&
-                    !unresolvedNoticeShown)
-                {
-                    string detail = lastAttachError == 0
-                        ? "No usable native window was found."
-                        : "AttachConsole failed with Win32 error " + lastAttachError + ".";
-
-                    WriteToggleConsoleDiagnostic(
-                        detail + " WindowsGSM process registered=" + matchingProcessRegistered + ".");
-                    unresolvedNoticeShown = true;
-                }
-
-                await Task.Delay(250);
-            }
-        }
-
-        private static bool TrySendCtrlC(Process process, int timeoutMilliseconds)
-        {
-            lock (ConsoleAttachLock)
-            {
-                bool attached = false;
-
-                try
-                {
-                    if (process == null || process.HasExited)
-                        return true;
-
-                    // The monitor also uses AttachConsole for HWND discovery. The shared lock
-                    // prevents both operations from changing WindowsGSM's console attachment at once.
-                    if (GetConsoleWindow() != IntPtr.Zero)
-                        return false;
-
-                    attached = AttachConsole((uint)process.Id);
-                    if (!attached)
-                        return false;
-
-                    // Ignore CTRL+C in WindowsGSM itself while forwarding it to the server console.
-                    SetConsoleCtrlHandler(null, true);
-
-                    if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0))
-                        return false;
-
-                    return process.WaitForExit(timeoutMilliseconds);
-                }
-                catch
-                {
-                    return false;
-                }
-                finally
-                {
-                    if (attached)
-                    {
-                        try
-                        {
-                            SetConsoleCtrlHandler(null, false);
-                            FreeConsole();
-                        }
-                        catch
-                        {
-                        }
                     }
                 }
             }
