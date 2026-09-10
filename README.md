@@ -55,8 +55,8 @@ Valheim, BepInEx and third-party mods are not distributed with this plugin.
 
 ## Plugin installation
 
-1. Download this repository as a ZIP from **Code → Download ZIP**, or clone it with Git.
-2. Extract/copy the complete `Valheim.cs` folder into `<WindowsGSM>\plugins\`.
+1. Download the latest release archive from [Releases](https://github.com/PapaGordon/WindowsGSM.Valheim-MeFriendos/releases/latest).
+2. Extract the complete `Valheim.cs` folder into `<WindowsGSM>\plugins\`.
 3. Click **Reload Plugins** or restart WindowsGSM.
 4. Add **Valheim Dedicated Server** and run **Install**.
 5. Replace the default `CHANGE_ME` password in **Server Start Param** with a strong password of at least five characters.
