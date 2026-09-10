@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/Raziel7893/WindowsGSM/releases/tag/v1.25.1.22"><img src="https://img.shields.io/badge/WindowsGSM-Raziel%20v1.25.1.22-38CDD4" alt="Raziel WindowsGSM v1.25.1.22"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.1-8802db" alt="Version 0.1.1"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.2-8802db" alt="Version 0.1.2"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
@@ -23,6 +23,8 @@ This plugin installs, updates and runs the official Valheim Dedicated Server thr
 - Supports BepInEx on Windows without a custom wrapper: when BepInEx is installed beside `valheim_server.exe`, launching the normal server executable loads it through Doorstop.
 - Supports the WindowsGSM embedded console as read-only output while keeping the native console available for clean shutdown.
 - Keeps Valheim's live runtime output available to the WindowsGSM embedded console by avoiding native `-logFile` redirection while Embed Console is enabled.
+- Repairs and continuously synchronizes the native console window handle used by WindowsGSM Toggle Console.
+- Integrates with Raziel WindowsGSM's `ShowConsole` state so the correct Valheim console window can be shown and hidden.
 - Sends CTRL+C first when stopping the server, as recommended by Valheim, with a controlled fallback if the process does not exit.
 - Validates the game port and requires a non-placeholder server password of at least five characters.
 - Creates local `save-data` and `logs` directories when needed.
@@ -42,11 +44,13 @@ This plugin installs, updates and runs the official Valheim Dedicated Server thr
 | Networking | Steam backend, no Crossplay |
 | Mod framework | BepInEx-ready |
 | Built-in RCON | None |
+| Embedded Console | Read-only process output |
+| Toggle Console | Native Valheim console window |
 | Firewall ports | Manual configuration only |
 
 ## Requirements
 
-- [WindowsGSM](https://github.com/WindowsGSM/WindowsGSM) 1.21 or newer
+- [Raziel7893/WindowsGSM v1.25.1.22](https://github.com/Raziel7893/WindowsGSM/releases/tag/v1.25.1.22) or a compatible WindowsGSM build
 - Administrator rights for WindowsGSM
 - 64-bit Windows
 - For mods: the current [BepInExPack Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) and server-compatible Valheim mods
@@ -129,7 +133,21 @@ WindowsGSM writes the selected server's Embed Console state into the plugin's `A
 
 Valheim's `-logFile` option redirects the live runtime log away from the process output used by WindowsGSM. Version 0.1.1 therefore does not include `-logFile` in the default parameters and removes a legacy/manual `-logFile <path>` argument from the launch command only while Embed Console is enabled. With Embed Console disabled, a manually configured `-logFile` is left untouched.
 
-Valheim's own dedicated-server documentation recommends stopping the server with CTRL+C. The plugin therefore tries a console CTRL+C first and waits up to 20 seconds. If that is unavailable, it tries the original WindowsGSM Valheim console-keystroke method. A forced process kill is used only as the final fallback.
+Valheim's own dedicated-server documentation recommends stopping the server with CTRL+C. The plugin therefore tries a console CTRL+C first and waits up to 20 seconds. If that is unavailable, it tries the console-keystroke method. A forced process kill is used only as the final fallback.
+
+## Toggle Console
+
+WindowsGSM stores a native window handle for each running server and uses that handle when **Toggle Console** is clicked. With Valheim, the usable console window can be created or resolved after the initial process startup, leaving WindowsGSM with a missing or stale handle.
+
+Version `0.1.2` keeps that handle synchronized while Valheim is running. It refreshes `Process.MainWindowHandle`, searches process-owned top-level windows and can fall back to `AttachConsole()` / `GetConsoleWindow()` for a classic console-host window. The resolved HWND is written back to WindowsGSM's `ServerMetadata.MainWindow` and `windowsIntPtr` cache.
+
+On Raziel WindowsGSM, the plugin also follows the persistent `ShowConsole` state and applies `ShowNormal` or `Hide` directly to the resolved window. Console discovery and CTRL+C shutdown share the same attachment lock so both operations cannot alter WindowsGSM's console attachment simultaneously.
+
+Toggle Console diagnostics are written to:
+
+```text
+<WindowsGSM>\servers\<server-id>\cache\valheim-toggle-console.log
+```
 
 ## Updating Valheim
 
@@ -142,6 +160,15 @@ Valheim's own dedicated-server documentation recommends stopping the server with
 The plugin does not automatically install, remove or update third-party mods.
 
 ## Troubleshooting
+
+### Toggle Console does nothing
+
+1. Fully restart the Valheim server after replacing or reloading the plugin.
+2. Wait until WindowsGSM reports the server as started.
+3. Click **Toggle Console** once to show the native console and again to hide it.
+4. If the window does not react, inspect `<WindowsGSM>\servers\<server-id>\cache\valheim-toggle-console.log`.
+
+Useful entries include `Resolved HWND`, `WindowsGSM MainWindow updated`, `Detected WindowsGSM ShowConsole state support`, `Applied ShowConsole=True` and `Applied ShowConsole=False`.
 
 ### Startup says the password placeholder must be changed
 
@@ -182,6 +209,8 @@ Run WindowsGSM as administrator. If an unrestricted `valheim_server.exe` applica
 - With Embed Console enabled, live Valheim output continues after the Unity memory setup lines.
 - A legacy/manual `-logFile` parameter is ignored for the actual launch only while Embed Console is enabled.
 - With Embed Console disabled, a manually configured `-logFile` remains available to Valheim.
+- Toggle Console shows the native Valheim console and hides it again.
+- `valheim-toggle-console.log` records the native-window discovery and show/hide state.
 - Stop sends CTRL+C and the world shuts down cleanly.
 - No broad WindowsGSM application exception remains for this server's `valheim_server.exe` after startup.
 - Manually configured `2456-2457/UDP` rules remain present.
@@ -193,7 +222,7 @@ Run WindowsGSM as administrator. If an unrestricted `valheim_server.exe` applica
 - Original plugin: [Sarpendon/WindowsGSM.Valheim](https://github.com/Sarpendon/WindowsGSM.Valheim)
 - Valheim dedicated-server guide: [valheim.com/support/a-guide-to-dedicated-servers](https://valheim.com/support/a-guide-to-dedicated-servers/)
 - BepInExPack Valheim: [Thunderstore](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/)
-- WindowsGSM: [github.com/WindowsGSM/WindowsGSM](https://github.com/WindowsGSM/WindowsGSM)
+- WindowsGSM: [Raziel7893/WindowsGSM v1.25.1.22](https://github.com/Raziel7893/WindowsGSM/releases/tag/v1.25.1.22)
 - Community: [mefriendos.de](https://mefriendos.de)
 
 This is an independent community plugin. It is not affiliated with or endorsed by Iron Gate, Coffee Stain Publishing, BepInEx, Thunderstore, Sarpendon or WindowsGSM.
