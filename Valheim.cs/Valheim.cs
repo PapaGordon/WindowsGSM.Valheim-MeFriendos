@@ -20,7 +20,7 @@ namespace WindowsGSM.Plugins
             name = "WindowsGSM.Valheim",
             author = "MeFriendos",
             description = "WindowsGSM plugin for Valheim Dedicated Server (MeFriendos build)",
-            version = "0.1.0",
+            version = "0.1.1",
             url = "https://github.com/PapaGordon/WindowsGSM.Valheim-MeFriendos",
             color = "#8802db"
         };
@@ -48,7 +48,7 @@ namespace WindowsGSM.Plugins
 
         // Steam backend only. Crossplay is intentionally not enabled in this MeFriendos build.
         // Change the placeholder password before starting the server.
-        public string Additional = "-password \"CHANGE_ME\" -savedir \".\\save-data\" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200 -logFile \".\\logs\\valheim_server.log\"";
+        public string Additional = "-password \"CHANGE_ME\" -savedir \".\\save-data\" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200";
 
         private const uint CTRL_C_EVENT = 0;
         private delegate bool ConsoleCtrlDelegate(uint ctrlType);
@@ -69,6 +69,7 @@ namespace WindowsGSM.Plugins
         {
             string serverFiles = ServerPath.GetServersServerFiles(_serverData.ServerID);
             string executable = ServerPath.GetServersServerFiles(_serverData.ServerID, StartPath);
+            bool embedConsole = AllowsEmbedConsole;
 
             if (!File.Exists(executable))
             {
@@ -91,7 +92,7 @@ namespace WindowsGSM.Plugins
             Directory.CreateDirectory(Path.Combine(serverFiles, "save-data"));
             Directory.CreateDirectory(Path.Combine(serverFiles, "logs"));
 
-            string parameters = BuildParameters();
+            string parameters = BuildParameters(embedConsole);
 
             var process = new Process
             {
@@ -108,7 +109,7 @@ namespace WindowsGSM.Plugins
 
             // Valheim is administered in-game. The embedded console is output-only so
             // stdin remains attached to the native console for a clean CTRL+C shutdown.
-            if (_serverData.EmbedConsole)
+            if (embedConsole)
             {
                 process.StartInfo.RedirectStandardOutput = true;
                 process.StartInfo.RedirectStandardError = true;
@@ -122,7 +123,7 @@ namespace WindowsGSM.Plugins
             {
                 process.Start();
 
-                if (_serverData.EmbedConsole)
+                if (embedConsole)
                 {
                     process.BeginOutputReadLine();
                     process.BeginErrorReadLine();
@@ -237,11 +238,18 @@ namespace WindowsGSM.Plugins
             return true;
         }
 
-        private string BuildParameters()
+        private string BuildParameters(bool embedConsole)
         {
             string parameters = "-nographics -batchmode";
+            string serverParameters = _serverData.ServerParam ?? string.Empty;
 
-            if (!HasArgument(_serverData.ServerParam, "-public"))
+            // Valheim redirects its live server output away from the process streams when
+            // -logFile is used. WindowsGSM's embedded console reads those process streams,
+            // so suppress -logFile only while Embed Console is enabled.
+            if (embedConsole)
+                serverParameters = RemoveArgumentWithValue(serverParameters, "-logFile");
+
+            if (!HasArgument(serverParameters, "-public"))
                 parameters += " -public 1";
 
             if (!string.IsNullOrWhiteSpace(_serverData.ServerName))
@@ -252,10 +260,25 @@ namespace WindowsGSM.Plugins
             if (!string.IsNullOrWhiteSpace(_serverData.ServerMap))
                 parameters += $" -world {Quote(_serverData.ServerMap)}";
 
-            if (!string.IsNullOrWhiteSpace(_serverData.ServerParam))
-                parameters += $" {_serverData.ServerParam}";
+            if (!string.IsNullOrWhiteSpace(serverParameters))
+                parameters += $" {serverParameters}";
 
             return parameters;
+        }
+
+        private static string RemoveArgumentWithValue(string arguments, string name)
+        {
+            if (string.IsNullOrWhiteSpace(arguments))
+                return arguments;
+
+            string cleaned = Regex.Replace(
+                arguments,
+                $@"(?<!\S){Regex.Escape(name)}(?:\s+(?:""[^""]*""|\S+))?",
+                string.Empty,
+                RegexOptions.IgnoreCase
+            );
+
+            return Regex.Replace(cleaned, @"\s{2,}", " ").Trim();
         }
 
         private bool RemoveAutomaticBroadFirewallRule()
