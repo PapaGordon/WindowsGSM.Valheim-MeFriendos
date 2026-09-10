@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/WindowsGSM/WindowsGSM"><img src="https://img.shields.io/badge/WindowsGSM-%E2%89%A51.21-38CDD4" alt="WindowsGSM 1.21+"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.0-8802db" alt="Version 0.1.0"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.1-8802db" alt="Version 0.1.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
@@ -22,6 +22,7 @@ This plugin installs, updates and runs the official Valheim Dedicated Server thr
 - Uses the Steam backend by default and explicitly rejects accidental `-crossplay` startup parameters.
 - Supports BepInEx on Windows without a custom wrapper: when BepInEx is installed beside `valheim_server.exe`, launching the normal server executable loads it through Doorstop.
 - Supports the WindowsGSM embedded console as read-only output while keeping the native console available for clean shutdown.
+- Keeps Valheim's live runtime output available to the WindowsGSM embedded console by avoiding native `-logFile` redirection while Embed Console is enabled.
 - Sends CTRL+C first when stopping the server, as recommended by Valheim, with a controlled fallback if the process does not exit.
 - Validates the game port and requires a non-placeholder server password of at least five characters.
 - Creates local `save-data` and `logs` directories when needed.
@@ -65,10 +66,12 @@ Valheim, BepInEx and third-party mods are not distributed with this plugin.
 The default parameters are:
 
 ```text
--password "CHANGE_ME" -savedir ".\save-data" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200 -logFile ".\logs\valheim_server.log"
+-password "CHANGE_ME" -savedir ".\save-data" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200
 ```
 
 The plugin intentionally refuses to start while the placeholder password is still configured.
+
+If you upgrade an existing 0.1.0 server and `-logFile` is still present in **Server Start Param**, you do not have to remove it for Embed Console to work: version 0.1.1 filters that argument from the Valheim launch command while Embed Console is enabled. It is still recommended to remove the obsolete parameter from the saved configuration unless you intentionally want to use it with Embed Console disabled.
 
 ## Steam-only networking and ports
 
@@ -104,7 +107,7 @@ For a mod profile created with r2modman or Thunderstore Mod Manager:
 3. Copy the server-compatible contents from `BepInEx\plugins`, `BepInEx\config` and, when required, `BepInEx\patchers` into the corresponding server folders.
 4. Copy additional root files only when a specific mod explicitly requires them.
 5. Do not deploy client-only mods to the dedicated server unless their documentation says they support server installation.
-6. Start the server and review `BepInEx\LogOutput.log` plus the normal Valheim log before allowing players to join.
+6. Start the server and review `BepInEx\LogOutput.log` plus the WindowsGSM embedded console. If Embed Console is disabled and you intentionally configure Valheim's `-logFile`, review that file instead.
 
 Back up the world, BepInEx configuration and mod list before Valheim or mod updates. Game updates can temporarily break individual mods even when BepInEx itself still loads.
 
@@ -120,7 +123,11 @@ The plugin does **not** create port rules. The intended MeFriendos policy is a n
 
 ## Embedded console and shutdown
 
-When **Embed Console** is enabled, stdout and stderr are forwarded to WindowsGSM. Standard input is deliberately not redirected.
+When **Embed Console** is enabled, Valheim's standard output and standard error streams are forwarded to WindowsGSM. Standard input is deliberately not redirected so the native console remains available for clean CTRL+C shutdown.
+
+WindowsGSM writes the selected server's Embed Console state into the plugin's `AllowsEmbedConsole` field immediately before `Start()` is called. The plugin therefore uses that field as the effective runtime state, matching the normal WindowsGSM plugin flow.
+
+Valheim's `-logFile` option redirects the live runtime log away from the process output used by WindowsGSM. Version 0.1.1 therefore does not include `-logFile` in the default parameters and removes a legacy/manual `-logFile <path>` argument from the launch command only while Embed Console is enabled. With Embed Console disabled, a manually configured `-logFile` is left untouched.
 
 Valheim's own dedicated-server documentation recommends stopping the server with CTRL+C. The plugin therefore tries a console CTRL+C first and waits up to 20 seconds. If that is unavailable, it tries the original WindowsGSM Valheim console-keystroke method. A forced process kill is used only as the final fallback.
 
@@ -130,7 +137,7 @@ Valheim's own dedicated-server documentation recommends stopping the server with
 2. Back up `save-data`, the world files and the complete BepInEx configuration/mod set.
 3. Click **Update** in WindowsGSM.
 4. Confirm that the current BepInExPack and all server mods support the installed Valheim version.
-5. Start the server and inspect the logs for mod-loader or plugin errors.
+5. Start the server and inspect the console/logs for mod-loader or plugin errors.
 
 The plugin does not automatically install, remove or update third-party mods.
 
@@ -143,6 +150,10 @@ Edit **Server Start Param** and replace `CHANGE_ME` with the real server passwor
 ### Startup says Crossplay is disabled
 
 Remove `-crossplay` from **Server Start Param**. This build is intentionally configured for Steam networking.
+
+### Embedded console stops after the Unity memory setup lines
+
+Check **Server Start Param** for a manually saved `-logFile` argument. Version 0.1.1 filters it from the actual Valheim command whenever Embed Console is enabled, so the live Valheim output stays attached to WindowsGSM. For a clean upgraded configuration, remove the old `-logFile` argument from the saved parameters as well.
 
 ### Players cannot connect
 
@@ -168,7 +179,9 @@ Run WindowsGSM as administrator. If an unrestricted `valheim_server.exe` applica
 - The server refuses `-crossplay` in the start parameters.
 - The Steam backend starts on the configured port and port +1.
 - BepInEx loads when correctly installed beside `valheim_server.exe`.
-- The embedded console receives server/BepInEx output without redirecting stdin.
+- With Embed Console enabled, live Valheim output continues after the Unity memory setup lines.
+- A legacy/manual `-logFile` parameter is ignored for the actual launch only while Embed Console is enabled.
+- With Embed Console disabled, a manually configured `-logFile` remains available to Valheim.
 - Stop sends CTRL+C and the world shuts down cleanly.
 - No broad WindowsGSM application exception remains for this server's `valheim_server.exe` after startup.
 - Manually configured `2456-2457/UDP` rules remain present.
