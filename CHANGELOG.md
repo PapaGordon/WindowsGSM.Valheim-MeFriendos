@@ -2,6 +2,25 @@
 
 All notable changes to the MeFriendos build are documented here.
 
+## 0.1.2 - 2026-09-10
+
+### Fixed
+
+- Fixed WindowsGSM **Toggle Console** handling for Valheim Dedicated Server.
+- Added refreshed native window-handle detection instead of relying on an early cached `Process.MainWindowHandle` value.
+- Added top-level window discovery with `EnumWindows` / `GetWindowThreadProcessId` and a classic console fallback through `AttachConsole` / `GetConsoleWindow`.
+- Synchronizes the resolved native console HWND with WindowsGSM `ServerMetadata.MainWindow` and the server's `windowsIntPtr` cache.
+- Added support for Raziel WindowsGSM's persistent `ShowConsole` state so Toggle Console can directly show and hide the resolved Valheim console window.
+- Added lifetime monitoring so a stale or replaced window handle can be repaired while the server remains running.
+- Added `valheim-toggle-console.log` in the WindowsGSM server cache folder for native-window diagnostics.
+- Serialized console-window discovery and CTRL+C shutdown with a shared lock so both paths cannot call `AttachConsole` at the same time.
+- Improved the CTRL+C fallback to prefer the native HWND already registered by the Toggle Console monitor.
+
+### Unchanged
+
+- The working `0.1.1` Embedded Console implementation remains based on redirected Valheim stdout/stderr.
+- Existing Steam-only networking, BepInEx support, password validation and firewall hardening remain unchanged.
+
 ## 0.1.1 - 2026-09-10
 
 ### Fixed
