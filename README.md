@@ -21,10 +21,11 @@ This plugin installs, updates and runs the official Valheim Dedicated Server thr
 - Installs and updates the official Valheim Dedicated Server through SteamCMD.
 - Uses the Steam backend by default and explicitly rejects accidental `-crossplay` startup parameters.
 - Supports BepInEx on Windows without a custom wrapper: when BepInEx is installed beside `valheim_server.exe`, launching the normal server executable loads it through Doorstop.
-- Supports the WindowsGSM embedded console as read-only output while keeping the native console available for clean shutdown.
+- Supports the WindowsGSM embedded console as read-only output while keeping stdin available for clean shutdown.
 - Keeps Valheim's live runtime output available to the WindowsGSM embedded console by avoiding native `-logFile` redirection while Embed Console is enabled.
-- Repairs and continuously synchronizes the native console window handle used by WindowsGSM Toggle Console.
-- Integrates with Raziel WindowsGSM's `ShowConsole` state so the correct Valheim console window can be shown and hidden.
+- Starts the native Valheim console hidden while Embed Console is enabled so the redirected console window does not flash or remain visible unnecessarily.
+- Leaves WindowsGSM Toggle Console disabled while Embed Console is active because stdout/stderr are redirected into WindowsGSM.
+- Keeps normal native-window behavior when Embed Console is disabled.
 - Sends CTRL+C first when stopping the server, as recommended by Valheim, with a controlled fallback if the process does not exit.
 - Validates the game port and requires a non-placeholder server password of at least five characters.
 - Creates local `save-data` and `logs` directories when needed.
@@ -45,7 +46,7 @@ This plugin installs, updates and runs the official Valheim Dedicated Server thr
 | Mod framework | BepInEx-ready |
 | Built-in RCON | None |
 | Embedded Console | Read-only process output |
-| Toggle Console | Native Valheim console window |
+| Toggle Console | Disabled while Embed Console is enabled |
 | Firewall ports | Manual configuration only |
 
 ## Requirements
@@ -127,27 +128,17 @@ The plugin does **not** create port rules. The intended MeFriendos policy is a n
 
 ## Embedded console and shutdown
 
-When **Embed Console** is enabled, Valheim's standard output and standard error streams are forwarded to WindowsGSM. Standard input is deliberately not redirected so the native console remains available for clean CTRL+C shutdown.
+When **Embed Console** is enabled, Valheim's standard output and standard error streams are forwarded to WindowsGSM. Standard input is deliberately not redirected so the server can still receive a clean CTRL+C shutdown request.
+
+The native console window is started hidden in this mode. Raziel WindowsGSM disables **Toggle Console** while standard output is redirected; this is intentional for the MeFriendos build because the useful Valheim runtime output is already available in the WindowsGSM embedded console.
+
+When **Embed Console** is disabled, stdout/stderr remain attached to Valheim normally and the native process starts minimized instead of hidden.
 
 WindowsGSM writes the selected server's Embed Console state into the plugin's `AllowsEmbedConsole` field immediately before `Start()` is called. The plugin therefore uses that field as the effective runtime state, matching the normal WindowsGSM plugin flow.
 
 Valheim's `-logFile` option redirects the live runtime log away from the process output used by WindowsGSM. Version 0.1.1 therefore does not include `-logFile` in the default parameters and removes a legacy/manual `-logFile <path>` argument from the launch command only while Embed Console is enabled. With Embed Console disabled, a manually configured `-logFile` is left untouched.
 
 Valheim's own dedicated-server documentation recommends stopping the server with CTRL+C. The plugin therefore tries a console CTRL+C first and waits up to 20 seconds. If that is unavailable, it tries the console-keystroke method. A forced process kill is used only as the final fallback.
-
-## Toggle Console
-
-WindowsGSM stores a native window handle for each running server and uses that handle when **Toggle Console** is clicked. With Valheim, the usable console window can be created or resolved after the initial process startup, leaving WindowsGSM with a missing or stale handle.
-
-Version `0.1.2` keeps that handle synchronized while Valheim is running. It refreshes `Process.MainWindowHandle`, searches process-owned top-level windows and can fall back to `AttachConsole()` / `GetConsoleWindow()` for a classic console-host window. The resolved HWND is written back to WindowsGSM's `ServerMetadata.MainWindow` and `windowsIntPtr` cache.
-
-On Raziel WindowsGSM, the plugin also follows the persistent `ShowConsole` state and applies `ShowNormal` or `Hide` directly to the resolved window. Console discovery and CTRL+C shutdown share the same attachment lock so both operations cannot alter WindowsGSM's console attachment simultaneously.
-
-Toggle Console diagnostics are written to:
-
-```text
-<WindowsGSM>\servers\<server-id>\cache\valheim-toggle-console.log
-```
 
 ## Updating Valheim
 
@@ -161,14 +152,9 @@ The plugin does not automatically install, remove or update third-party mods.
 
 ## Troubleshooting
 
-### Toggle Console does nothing
+### Toggle Console is disabled
 
-1. Fully restart the Valheim server after replacing or reloading the plugin.
-2. Wait until WindowsGSM reports the server as started.
-3. Click **Toggle Console** once to show the native console and again to hide it.
-4. If the window does not react, inspect `<WindowsGSM>\servers\<server-id>\cache\valheim-toggle-console.log`.
-
-Useful entries include `Resolved HWND`, `WindowsGSM MainWindow updated`, `Detected WindowsGSM ShowConsole state support`, `Applied ShowConsole=True` and `Applied ShowConsole=False`.
+This is expected while **Embed Console** is enabled. Valheim's stdout/stderr are redirected into the WindowsGSM embedded console, so the native window does not provide a second useful output view. Disable Embed Console if you explicitly want to use the native console window instead.
 
 ### Startup says the password placeholder must be changed
 
@@ -207,10 +193,10 @@ Run WindowsGSM as administrator. If an unrestricted `valheim_server.exe` applica
 - The Steam backend starts on the configured port and port +1.
 - BepInEx loads when correctly installed beside `valheim_server.exe`.
 - With Embed Console enabled, live Valheim output continues after the Unity memory setup lines.
+- With Embed Console enabled, the native console starts hidden and Toggle Console remains disabled.
 - A legacy/manual `-logFile` parameter is ignored for the actual launch only while Embed Console is enabled.
 - With Embed Console disabled, a manually configured `-logFile` remains available to Valheim.
-- Toggle Console shows the native Valheim console and hides it again.
-- `valheim-toggle-console.log` records the native-window discovery and show/hide state.
+- With Embed Console disabled, the native Valheim process starts minimized rather than hidden.
 - Stop sends CTRL+C and the world shuts down cleanly.
 - No broad WindowsGSM application exception remains for this server's `valheim_server.exe` after startup.
 - Manually configured `2456-2457/UDP` rules remain present.
