@@ -131,7 +131,7 @@ namespace WindowsGSM.Plugins
                     WorkingDirectory = serverFiles,
                     FileName = executable,
                     Arguments = parameters,
-                    WindowStyle = ProcessWindowStyle.Minimized,
+                    WindowStyle = ProcessWindowStyle.Hidden,
                     UseShellExecute = false
                 },
                 EnableRaisingEvents = true
@@ -153,15 +153,21 @@ namespace WindowsGSM.Plugins
             {
                 process.Start();
 
-#pragma warning disable 4014
-                Task.Run(() => MonitorNativeConsoleHandle(process));
-#pragma warning restore 4014
-
                 if (embedConsole)
                 {
                     process.BeginOutputReadLine();
                     process.BeginErrorReadLine();
+
+                    // Raziel v1.25.1.22 disables the Toggle Console button while this
+                    // StartInfo flag remains true. The redirected stdout pipe was already
+                    // created by Process.Start(), so changing StartInfo afterwards does not
+                    // alter the running process or stop the asynchronous Embedded Console.
+                    process.StartInfo.RedirectStandardOutput = false;
                 }
+
+#pragma warning disable 4014
+                Task.Run(() => MonitorNativeConsoleHandle(process));
+#pragma warning restore 4014
 
                 return Task.FromResult(process);
             }
