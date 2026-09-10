@@ -2,6 +2,21 @@
 
 All notable changes to the MeFriendos build are documented here.
 
+## 0.1.1 - 2026-09-10
+
+### Fixed
+
+- Fixed the WindowsGSM embedded console stopping after Valheim's initial Unity memory setup output.
+- Removed `-logFile` from the default server parameters so Valheim keeps its live runtime output attached to the process streams used by WindowsGSM.
+- Added compatibility handling for existing 0.1.0 installations: when Embed Console is enabled, a saved `-logFile <path>` argument is removed from the actual Valheim launch command without changing the saved server configuration.
+- Kept manually configured `-logFile` support intact when Embed Console is disabled.
+- Synchronized the README, installation notes and displayed version with plugin version 0.1.1.
+
+### Notes
+
+- WindowsGSM overwrites the plugin's `AllowsEmbedConsole` value with the selected server's effective Embed Console state immediately before calling `Start()`. Version 0.1.1 uses that runtime value intentionally.
+- Existing users may remove an old `-logFile` argument from **Server Start Param** for a clean configuration, but it is no longer required for the embedded console fix to work.
+
 ## 0.1.0 - 2026-09-10
 
 ### Added
