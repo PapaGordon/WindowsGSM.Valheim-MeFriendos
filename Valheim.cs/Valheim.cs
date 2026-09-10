@@ -101,7 +101,7 @@ namespace WindowsGSM.Plugins
                     WorkingDirectory = serverFiles,
                     FileName = executable,
                     Arguments = parameters,
-                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WindowStyle = embedConsole ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Minimized,
                     UseShellExecute = false
                 },
                 EnableRaisingEvents = true
@@ -109,7 +109,8 @@ namespace WindowsGSM.Plugins
 
             // Embedded Console is output-only. stdout/stderr are forwarded into WindowsGSM,
             // while stdin stays attached to the native console for clean CTRL+C shutdown.
-            // Raziel WindowsGSM intentionally disables Toggle Console while stdout is redirected.
+            // Raziel WindowsGSM disables Toggle Console while stdout is redirected, which is
+            // intentional here because the useful runtime output is already shown in WindowsGSM.
             if (embedConsole)
             {
                 process.StartInfo.RedirectStandardOutput = true;
