@@ -1,4 +1,4 @@
-MeFriendos WindowsGSM Valheim Plugin 0.1.0
+MeFriendos WindowsGSM Valheim Plugin 0.1.1
 ==========================================
 
 INSTALL
@@ -21,6 +21,22 @@ INSTALL
    UDP 2456-2457
 
    Valheim has no built-in RCON port.
+
+DEFAULT PARAMETERS
+------------------
+-password "CHANGE_ME" -savedir ".\save-data" -public 1 -saveinterval 1800 -backups 4 -backupshort 7200 -backuplong 43200
+
+EMBEDDED CONSOLE
+----------------
+Version 0.1.1 removes -logFile from the default parameters so Valheim's live
+runtime output remains available to the WindowsGSM embedded console.
+
+If an existing 0.1.0 server still has -logFile in Server Start Param, the
+plugin filters that argument from the actual Valheim launch command while
+Embed Console is enabled. The saved WindowsGSM configuration is not modified.
+
+When Embed Console is disabled, a manually configured -logFile argument is
+left untouched and can still be used normally.
 
 BEPINEX / MODDED SERVER
 -----------------------
